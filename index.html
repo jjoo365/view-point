@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>관점</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23ff00b4'/%3E%3C/svg%3E">
+<style>
+  * { margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000000; }
+  canvas { display: block; cursor: crosshair; touch-action: none; }
+</style>
+</head>
+<body>
+
+<canvas id="cv"></canvas>
+
+<script>
+  var cv = document.getElementById('cv');
+  var ctx = cv.getContext('2d');
+  var W, H, M;
+
+  // 색 (Gaîté Lyrique 포스터 레퍼런스)
+  var BG = '#000000';
+  var BEAM = '#16241e';
+  var COLORS = ['#ff00b4', '#19f08a', '#2235f5', '#f5135a', '#ffffff', '#6a3cff', '#c8f5d8'];
+
+  // 처음 화면의 도형들 (x, y는 화면 비율 / s는 크기 비율)
+  var shapes = [
+    { x: .24, y: .27, s: .42, c: '#ff00b4', t: 'sq' },
+    { x: .64, y: .22, s: .07, c: '#2235f5', t: 'sq' },
+    { x: .93, y: .07, s: .13, c: '#19f08a', t: 'sq' },
+    { x: .95, y: .30, s: .05, c: '#f5135a', t: 'sq' },
+    { x: .78, y: .40, s: .04, c: '#ff00b4', t: 'sq' },
+    { x: .30, y: .56, s: .11, c: '#19f08a', t: 'sq' },
+    { x: .87, y: .60, s: .22, c: '#2235f5', t: 'sq' },
+    { x: .71, y: .78, s: .08, c: '#f5135a', t: 'sq' },
+    { x: .20, y: .78, s: .04, c: '#19f08a', t: 'sq' },
+    { x: .25, y: .90, s: .05, c: '#ffffff', t: 'sq' },
+    { x: .58, y: .93, s: .18, c: '#ffffff', t: 'sq' },
+    { x: .66, y: .52, s: .025, c: '#ffffff', t: 'sq' },
+    { x: .45, y: .66, s: .02, c: '#ffffff', t: 'sq' },
+    { x: .10, y: .66, s: .06, c: '#c8f5d8', t: 'ci' },
+    { x: .48, y: .10, s: .05, c: '#6a3cff', t: 'ci' },
+    { x: .40, y: .80, s: .06, c: '#ffffff', t: 'ch' }
+  ];
+  shapes.forEach(setup);
+
+  // 도형마다 움직임 값 준비
+  function setup(sh) {
+    sh.tx = sh.x; sh.ty = sh.y;          // 가야 할 위치
+    sh.g = sh.g || 1;                    // 지금 크기 배율 (새 도형은 0에서 시작)
+    sh.r = 0; sh.tr = 0;                 // 회전
+    sh.k = Math.random() * 2 - 1;        // 마우스 속도에 비틀리는 정도
+    sh.bend = Math.random() * .6 - .3;   // 연결선 휘어짐
+    sh.lc = Math.random() < .5 ? '#ff00b4' : '#19f08a';
+  }
+
+  // 화면 상태
+  var mx = 0, my = 0;        // 마우스
+  var fx = 0, fy = 0;        // 소실점 (마우스를 천천히 따라감)
+  var zoom = 1, tz = 1;      // 휠 확대
+  var ang = 0, ta = 0;       // 드래그 회전
+  var spd = 0;               // 마우스 속도
+  var burst = 0, spin = 0;   // 누르고 있을 때 터지는 선
+
+  function resize() {
+    var dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight; M = Math.min(W, H);
+    cv.width = W * dpr; cv.height = H * dpr;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resize();
+  mx = fx = W / 2; my = fy = H / 2;
+  window.addEventListener('resize', resize);
+
+  // 화면 비율 위치 → 실제 화면 위치 (회전, 확대 적용)
+  function toScreen(x, y) {
+    var dx = (x - .5) * W, dy = (y - .5) * H;
+    var c = Math.cos(ang), s = Math.sin(ang);
+    return [W / 2 + (dx * c - dy * s) * zoom, H / 2 + (dx * s + dy * c) * zoom];
+  }
+  // 반대로: 화면 위치 → 비율 위치
+  function toRatio(px, py) {
+    var dx = (px - W / 2) / zoom, dy = (py - H / 2) / zoom;
+    var c = Math.cos(-ang), s = Math.sin(-ang);
+    return [(dx * c - dy * s) / W + .5, (dx * s + dy * c) / H + .5];
+  }
+
+  // 도형의 테두리 점들
+  function outline(sh) {
+    var p = toScreen(sh.x, sh.y);
+    var size = sh.s * M * zoom * sh.g;
+    var rot = ang + sh.r + spd * sh.k * .02;
+    var pts = [];
+    var n = (sh.t === 'ci') ? 28 : 4;
+    for (var i = 0; i < n; i++) {
+      var a = rot + (sh.t === 'ci' ? i / n * Math.PI * 2 : Math.PI / 4 + i * Math.PI / 2);
+      var r = (sh.t === 'ci') ? size / 2 : size / Math.SQRT2;
+      pts.push([p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r]);
+    }
+    return { p: p, size: size, rot: rot, pts: pts };
+  }
+
+  function draw() {
+    // 부드럽게 따라가기
+    fx += (mx - fx) * .08;
+    fy += (my - fy) * .08;
+    zoom += (tz - zoom) * .1;
+    ang += (ta - ang) * .1;
+    spd *= .9;
+    burst += ((down ? 1 : 0) - burst) * .08;
+    spin += burst * .01;
+
+    shapes.forEach(function (sh) {
+      sh.x += (sh.tx - sh.x) * .1;
+      sh.y += (sh.ty - sh.y) * .1;
+      sh.r += (sh.tr - sh.r) * .1;
+      sh.g += (1 - sh.g) * .12;
+    });
+    var all = shapes.map(outline);
+
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+
+    // 1. 누르고 있으면 소실점에서 선이 터져 나옴
+    if (burst > .01) {
+      var L = Math.hypot(W, H);
+      ctx.lineWidth = 2;
+      for (var i = 0; i < 120; i++) {
+        var a = i / 120 * Math.PI * 2 + spin;
+        ctx.globalAlpha = burst * .45;
+        ctx.strokeStyle = (i % 3 === 0) ? '#ff00b4' : (i % 3 === 1) ? '#19f08a' : '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(fx + Math.cos(a) * L, fy + Math.sin(a) * L);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // 2. 도형에서 소실점으로 뻗는 면 (빛줄기 / 그림자)
+    ctx.fillStyle = BEAM;
+    all.forEach(function (o) {
+      for (var i = 0; i < o.pts.length; i++) {
+        var a = o.pts[i], b = o.pts[(i + 1) % o.pts.length];
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.closePath();
+        ctx.fill();
+      }
+    });
+
+    // 3. 면의 가장자리 선
+    ctx.lineWidth = .6;
+    ctx.strokeStyle = 'rgba(25, 240, 138, .35)';
+    all.forEach(function (o, n) {
+      if (shapes[n].t === 'ci') return;
+      o.pts.forEach(function (q) {
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(q[0], q[1]);
+        ctx.stroke();
+      });
+    });
+
+    // 4. 휘어진 연결선 + 끝의 작은 원 (3, 4번 레퍼런스)
+    all.forEach(function (o, n) {
+      var sh = shapes[n];
+      var cx = (o.p[0] + fx) / 2 - (fy - o.p[1]) * sh.bend;
+      var cy = (o.p[1] + fy) / 2 + (fx - o.p[0]) * sh.bend;
+      ctx.strokeStyle = sh.lc;
+      ctx.globalAlpha = .6;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(o.p[0], o.p[1]);
+      ctx.quadraticCurveTo(cx, cy, fx, fy);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+
+    // 5. 도형
+    all.forEach(function (o, n) {
+      var sh = shapes[n];
+      ctx.save();
+      ctx.shadowColor = (sh.t === 'ch') ? '#ffffff' : sh.c;   // 아주 약한 빛
+      ctx.shadowBlur = 6;
+      ctx.translate(o.p[0], o.p[1]);
+      ctx.rotate(o.rot);
+      var h = o.size / 2;
+      if (sh.t === 'ci') {
+        ctx.fillStyle = sh.c;
+        ctx.beginPath(); ctx.arc(0, 0, h, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = BG;
+        ctx.beginPath(); ctx.arc(h * .25, h * .1, h * .45, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = sh.c;
+        ctx.beginPath(); ctx.arc(h * .25, h * .1, h * .15, 0, Math.PI * 2); ctx.fill();
+      } else if (sh.t === 'ch') {
+        var u = o.size / 4;
+        for (var i = 0; i < 4; i++) for (var j = 0; j < 4; j++) {
+          ctx.fillStyle = (i + j) % 2 ? '#000000' : '#ffffff';
+          ctx.fillRect(-h + i * u, -h + j * u, u, u);
+        }
+      } else {
+        ctx.fillStyle = sh.c;
+        ctx.fillRect(-h, -h, o.size, o.size);
+      }
+      ctx.restore();
+
+      // 연결선 끝 마디
+      ctx.fillStyle = BG;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(o.p[0], o.p[1], 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(o.p[0], o.p[1], 2, 0, Math.PI * 2); ctx.fill();
+    });
+
+    // 6. 소실점 (체커)
+    var u = 8;
+    for (var i = 0; i < 4; i++) for (var j = 0; j < 4; j++) {
+      ctx.fillStyle = (i + j) % 2 ? '#000000' : '#ffffff';
+      ctx.fillRect(fx - 2 * u + i * u, fy - 2 * u + j * u, u, u);
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  // ---------- 반응 ----------
+  var down = false, moved = false, grab = null, sx = 0, sy = 0, lx = 0, ly = 0;
+
+  // 마우스 아래 있는 도형 찾기 (맨 위 도형부터)
+  function pick(px, py) {
+    for (var i = shapes.length - 1; i >= 0; i--) {
+      var o = outline(shapes[i]);
+      if (Math.hypot(px - o.p[0], py - o.p[1]) < Math.max(12, o.size / 2)) return shapes[i];
+    }
+    return null;
+  }
+
+  cv.addEventListener('pointerdown', function (e) {
+    down = true; moved = false;
+    sx = lx = e.clientX; sy = ly = e.clientY;
+    grab = pick(e.clientX, e.clientY);
+  });
+
+  window.addEventListener('pointermove', function (e) {
+    var dx = e.clientX - lx, dy = e.clientY - ly;
+    spd += Math.hypot(dx, dy) * .5;
+    mx = e.clientX; my = e.clientY;
+    lx = e.clientX; ly = e.clientY;
+    if (!down) return;
+    if (Math.hypot(e.clientX - sx, e.clientY - sy) > 5) moved = true;
+    if (grab) {
+      // 도형 잡고 옮기기
+      var r = toRatio(e.clientX, e.clientY);
+      grab.tx = r[0]; grab.ty = r[1];
+    } else {
+      // 빈 곳 드래그 → 화면 전체 회전
+      ta += dx * .004;
+    }
+  });
+
+  window.addEventListener('pointerup', function (e) {
+    if (down && !moved) {
+      if (grab) {
+        // 도형 클릭 → 색 바꾸고 45도 회전
+        grab.c = COLORS[Math.floor(Math.random() * COLORS.length)];
+        grab.tr += Math.PI / 4;
+      } else {
+        // 빈 곳 클릭 → 새 도형
+        var r = toRatio(e.clientX, e.clientY);
+        var types = ['sq', 'sq', 'sq', 'ci', 'ch'];
+        var sh = {
+          x: r[0], y: r[1],
+          s: .02 + Math.random() * Math.random() * .2,
+          c: COLORS[Math.floor(Math.random() * COLORS.length)],
+          t: types[Math.floor(Math.random() * types.length)],
+          g: .01
+        };
+        setup(sh);
+        shapes.push(sh);
+        if (shapes.length > 45) shapes.shift();
+      }
+    }
+    down = false; grab = null;
+  });
+
+  // 휠 → 확대 / 축소
+  window.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    tz *= (e.deltaY > 0) ? .9 : 1.1;
+    tz = Math.max(.35, Math.min(3, tz));
+  }, { passive: false });
+
+  // 더블클릭 / 스페이스 → 전부 흩어지기
+  function scatter() {
+    shapes.forEach(function (sh) {
+      sh.tx = Math.random();
+      sh.ty = Math.random();
+      sh.tr += (Math.random() < .5 ? -1 : 1) * Math.PI / 2;
+    });
+  }
+  cv.addEventListener('dblclick', scatter);
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space') { e.preventDefault(); scatter(); }
+  });
+
+  draw();
+</script>
+
+</body>
+</html>
